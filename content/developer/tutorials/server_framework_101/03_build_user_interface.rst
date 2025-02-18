@@ -219,7 +219,7 @@ the `ir.actions.act_window` model whose key fields include:
       attribute of the :ref:`field <reference/data/field>` data operation.
 
 .. seealso::
-   :doc:`Reference documentation for actions <../../reference/backend/actions>`
+   :ref:`Reference documentation for window actions <reference/actions/window>`
 
 As promised, we'll finally get to interact with our real estate properties in the UI. All we need
 now is an action to assign to the menu item.

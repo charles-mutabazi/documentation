@@ -907,7 +907,10 @@ perform custom validation and raise blocking validation errors if the constraint
           @api.constrains('amount')
           def _check_amount_higher_than_previous_offers(self):
               for offer in self:
-                  if offer.amount < max(offer.property_id.offer_ids.mapped('amount')):
+                  same_buyer_offers = offer.property_id.offer_ids.filtered(
+                      lambda o: o.buyer_id == offer.buyer_id
+                  )
+                  if offer.amount < max(same_buyer_offers.mapped('amount')):
                       raise ValidationError(_(
                           "The amount of the new offer must be higher than the amount of the previous "
                           "offers."
@@ -1014,14 +1017,6 @@ fields with default values.
 Trigger business workflows
 ==========================
 
-**Action buttons** allow users to trigger specific workflows directly from the user interface. These
-buttons can be of type **action**, defined in XML, or **object**, implemented in the model.
-Together, these types of buttons facilitate the integration of user interactions with business
-logic.
-
-.. todo: note: mention that the method is public so it can be called directly by the client.
-   always return something in public methods as they are part of the :ref:external API and can be called through XML-RPC
-
 .. _tutorials/server_framework_101/crud_methods:
 
 CRUD methods
@@ -1126,9 +1121,10 @@ accessed directly using :code:`record.field`.
 
       def unlink(self):
           for offer in self:
+              property_offers = offer.property_id.offer_ids
               if (
                   offer.property_id.state in ('offer_received', 'under_option')
-                  and len(offer.property_id.offer_ids) == 1  # The current offer is the last one.
+                  and not (property_offers - self)  # All the property's offers are being deleted.
               ):
                   offer.property_id.state = 'new'
           return super().unlink()
@@ -1165,45 +1161,174 @@ accessed directly using :code:`record.field`.
                       property.address_id = address.id
           return res
 
-.. _tutorials/server_framework_101/action_type_actions:
+.. _tutorials/server_framework_101/xml_actions:
 
-XML-defined actions
--------------------
+XML actions
+-----------
 
-Action-type buttons link to actions defined in XML and are typically used to display specific views
-or trigger server actions. These buttons allow developers to link workflows to the UI without
-writing Python code, making them ideal for simple, preconfigured tasks.
+**Action buttons** allow users to trigger workflows directly from the user interface. The simplest
+type of action button is **action**. These buttons are linked to actions defined in XML and are
+typically used to open specific views or trigger server actions. These buttons allow developers to
+link workflows to the UI without needing to write Python code, making them ideal for simple,
+preconfigured tasks.
 
-We already saw :ref:`how to link XML-defined window actions to menu items
-<tutorials/server_framework_101/define_window_actions>`. To link a button to an XML-defined action,
-a `button` element must be added to the view, with its `type` attribute set to `action`. The `name`
-attribute should reference the XML ID of the action to execute.
+We have already seen how to :ref:`link menu items to XML-defined window actions
+<tutorials/server_framework_101/define_window_actions>`. To link a **button** to an XML-defined
+action, a `button` element must be added to the view, with its `type` attribute set to `action`. The
+`name` attribute should reference the XML ID of the action to be executed, following the format
+`%(XML_ID)d`.
+
+.. example::
+   In the following example, a button is added to the product form view to display all products in
+   the same category.
+
+   .. code-block:: xml
+
+      <form>
+          <sheet>
+              <div name="button_box">
+                  <button
+                      string="Similar Products"
+                      type="action"
+                      name="product.view_products_action"
+                      context="{'search_default_category_id': category_id.id, 'create': False, 'edit': False}"
+                  />
+              </div>
+          </sheet>
+      </form>
+
+   .. note::
+      - The button is placed at the top of the form view by using a button container (`button_box`).
+      - The `context` attribute is used to:
+
+        - Filter the products to display only those in the same category as the current product.
+        - Prevent users from creating or editing products when browsing them through the button.
+
+.. seealso::
+   Reference documentation for :ref:`button containers
+   <reference/view_architectures/form/button_container>`.
 
 .. exercise::
+   Replace the property form view's :guilabel:`Offers` notebook page with a **stat button**. This
+   button should:
+
+   - Be placed at the top of the property form view.
+   - Display the total number of offers for the property.
+   - Use a relevant icon.
+   - Allow users to browse offers in list and form views.
+
    .. tip::
-      Rely on the reference documentation for :ref:`action buttons
-      <reference/view_architectures/form/button>` and :ref:`headers
-      <reference/view_architectures/form/header>` in form views.
+      - Rely on the reference documentation for :ref:`action buttons
+        <reference/view_architectures/form/button>` in form views.
+      - Find icon codes (`fa-<something>`) in the `Font Awesome v4 catalog
+        <https://fontawesome.com/v4/icons/>`_.
+      - Ensure that your count computations :ref:`scale with the number of records to process
+        <performance/good_practices/batch>`.
+      - Assign the `default_<field>` context key to a button to define default values when creating
+        new records opened through that button.
 
-.. todo: "view offers" statbutton with count + remove notebook page of offers
+.. spoiler:: Solution
 
-.. _tutorials/server_framework_101/object_type_actions:
+   .. code-block:: python
+      :caption: `real_estate_property.py`
+      :emphasize-lines: 4,8-15
 
-Model-defined actions
----------------------
+      offer_ids = fields.One2many(
+          string="Offers", comodel_name='real.estate.offer', inverse_name='property_id'
+      )
+      offer_count = fields.Integer(string="Offer Count", compute='_compute_offer_count')
 
-Object-type buttons link to model methods that execute custom business logic. These methods enable
-more complex workflows, such as processing the current records, configuring actions depending on
-these records, or integrating with external systems.
+      [...]
+
+      @api.depends('offer_ids')
+      def _compute_offer_count(self):
+          offer_data = self.env['real.estate.offer']._read_group(
+              [('property_id', 'in', self.ids)], groupby=['property_id'], aggregates=['__count'],
+          )
+          property_data = {property.id: count for property, count in offer_data}
+          for property in self:
+              property.offer_count = property_data.get(property.id, 0)
+
+   .. code-block:: xml
+      :caption: `real_estate_offer_views.xml`
+      :emphasize-lines: 1-10
+
+      <record id="real_estate.view_offers_action" model="ir.actions.act_window">
+          <field name="name">Offers</field>
+          <field name="res_model">real.estate.offer</field>
+          <field name="view_mode">list,form</field>
+          <field name="help" type="html">
+              <p class="o_view_nocontent_smiling_face">
+                  Create a new offer.
+              </p>
+          </field>
+      </record>
+
+   .. code-block:: python
+      :caption: `__manifest__.py`
+      :emphasize-lines: 1
+
+      'views/real_estate_property_views.xml',  # Depends on `real_estate_offer_views.xml`.
+
+   .. code-block:: xml
+      :caption: `real_estate_property_views.xml`
+      :emphasize-lines: 2-12
+
+      <sheet>
+          <div name="button_box" class="oe_button_box">
+              <button
+                  string="Offers"
+                  icon="fa-handshake-o"
+                  type="action"
+                  name="real_estate.view_offers_action"
+                  context="{'default_property_id': id}"
+              >
+                  <field string="Offers" name="offer_count" widget="statinfo"/>
+              </button>
+          </div>
+          [...]
+
+.. _tutorials/server_framework_101/model_actions:
+
+Model actions
+-------------
+
+Another, more versatile type of action button is **object**. These buttons are linked to model
+methods that execute custom business logic. These methods enable more complex workflows, such as
+processing the current records, configuring client actions depending on these records, or
+integrating with external systems.
 
 To link a button to a model-defined action, its `type` attribute must be set to `object`, and its
 `name` attribute must be set to the name of the model method to call when the button is clicked. The
 method receives the current recordset through `self` and should return a dictionary acting as an
 action descriptor.
 
+.. example::
+   In the following example,
+
+   .. note::
+      - Action methods should be public :dfn:`not prefixed with an underscore` to make them callable
+        by the client. Such methods should always return something as they are automatically part of
+        the :doc:`external API <../../reference/external_api>`.
+
+.. exercise::
+   #. tmp  ... in the header.
+
+   .. tip::
+      - Rely on the reference documentation for :ref:`headers
+        <reference/view_architectures/form/header>` in form views.
+
 .. todo: accept/refuse offer buttons -> auto refuse others when accepting (write)
 .. todo: multi-checkbox refuse offers in bulk
 .. todo: "assign myself as salesperson" action
+
+.. spoiler:: Solution
+
+   .. code-block:: python
+      :caption: `real_estate_property.py`
+      :emphasize-lines: 1
+
+      [...]
 
 ----
 

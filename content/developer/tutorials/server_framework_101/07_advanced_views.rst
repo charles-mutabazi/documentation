@@ -13,6 +13,7 @@ tmp
 .. todo: wizards -> create a "receive offer wizard" to default the amount to the property's selling price
 .. todo: context active_test False on the category_id field of products to see archived categories
 .. todo: sequence widget on tags
+.. todo: compute display_name for offers in form view
 
 
 ----
